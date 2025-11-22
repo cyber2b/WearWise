@@ -1,0 +1,7 @@
+{
+  "name": "dress picker",
+  "description": "Smart wardrobe assistant that picks your outfit based on what you haven't worn recently.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
