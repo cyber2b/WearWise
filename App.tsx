@@ -5,6 +5,48 @@ import { analyzeDressImage } from './services/geminiService';
 import { DressCard } from './components/DressCard';
 import { Sparkles, Camera, AlertCircle, CheckCircle2, Filter, RefreshCw, Trash2, X } from 'lucide-react';
 
+// --- Helper Utilities ---
+
+// Compress image to avoid LocalStorage quota limits
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        // Compress to JPEG 0.7 quality
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.onerror = (error) => reject(error);
+    };
+    reader.onerror = (error) => reject(error);
+  });
+};
+
 // --- Helper Components ---
 
 const Toast = ({ message }: { message: string }) => (
@@ -69,7 +111,21 @@ const Header = ({ title, subtitle }: { title: string, subtitle?: string }) => (
 
 export default function App() {
   const [view, setView] = useState<View>('home');
-  const [dresses, setDresses] = useState<Dress[]>([]);
+  
+  // Lazy initialize state to prevent overwriting LocalStorage with empty array on first render
+  const [dresses, setDresses] = useState<Dress[]>(() => {
+    const stored = localStorage.getItem('chicpick_dresses');
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch (e) {
+        console.error("Failed to parse wardrobe", e);
+        return [];
+      }
+    }
+    return [];
+  });
+
   const [suggestion, setSuggestion] = useState<Dress | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<FilterOption>(FilterOption.ALL);
@@ -81,18 +137,6 @@ export default function App() {
   // Upload State
   const [uploadImage, setUploadImage] = useState<string | null>(null);
   const [uploadAnalysis, setUploadAnalysis] = useState<AnalysisResult | null>(null);
-
-  // Load from local storage on mount
-  useEffect(() => {
-    const stored = localStorage.getItem('chicpick_dresses');
-    if (stored) {
-      try {
-        setDresses(JSON.parse(stored));
-      } catch (e) {
-        console.error("Failed to parse wardrobe", e);
-      }
-    }
-  }, []);
 
   // Save to local storage on change
   useEffect(() => {
@@ -112,18 +156,21 @@ export default function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64 = reader.result as string;
-      setUploadImage(base64);
+    try {
       setIsAnalyzing(true);
+      // Compress image before storing/analyzing
+      const compressedBase64 = await compressImage(file);
+      setUploadImage(compressedBase64);
       
       // Call Gemini API
-      const analysis = await analyzeDressImage(base64);
+      const analysis = await analyzeDressImage(compressedBase64);
       setUploadAnalysis(analysis);
+    } catch (error) {
+      console.error("Upload failed", error);
+      showNotification("Failed to process image");
+    } finally {
       setIsAnalyzing(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   const saveNewDress = () => {
@@ -168,8 +215,12 @@ export default function App() {
     const now = new Date().toISOString();
     setDresses(prev => prev.map(d => d.id === id ? { ...d, lastWorn: now } : d));
     
-    if (view === 'home') {
+    // If we are wearing the currently suggested dress, clear the suggestion
+    if (suggestion?.id === id) {
         setSuggestion(null);
+    }
+
+    if (view === 'home') {
         showNotification("Nice! Enjoy your outfit.");
     } else {
         showNotification("Marked as worn today");
@@ -179,14 +230,21 @@ export default function App() {
   const generateSuggestion = useCallback(() => {
     if (dresses.length === 0) return;
 
-    const now = new Date().getTime();
-    const twoDaysInMs = 2 * 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    // Filter Rule: Exclude items worn within last 2 days
+    // Filter Rule: Exclude items worn today or yesterday
     const availableDresses = dresses.filter(dress => {
       if (!dress.lastWorn) return true;
-      const lastWornTime = new Date(dress.lastWorn).getTime();
-      return (now - lastWornTime) > twoDaysInMs;
+      
+      const lastWornDate = new Date(dress.lastWorn);
+      const wornDay = new Date(lastWornDate.getFullYear(), lastWornDate.getMonth(), lastWornDate.getDate());
+      
+      const diffTime = Math.abs(today.getTime() - wornDay.getTime());
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      // 0 = Today, 1 = Yesterday. Both are excluded.
+      return diffDays >= 2;
     });
 
     if (availableDresses.length === 0) {

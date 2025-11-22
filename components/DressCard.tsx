@@ -12,12 +12,17 @@ interface DressCardProps {
 export const DressCard: React.FC<DressCardProps> = ({ dress, onDelete, onWear, compact = false }) => {
   const lastWornDate = dress.lastWorn ? new Date(dress.lastWorn) : null;
   
-  // Calculate days since worn
+  // Calculate days since worn (Calendar Days)
   let timeLabel = "Never worn";
   let isRecent = false;
 
   if (lastWornDate) {
-    const diffTime = Math.abs(new Date().getTime() - lastWornDate.getTime());
+    const now = new Date();
+    // Reset hours to compare calendar days accurately
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const wornDay = new Date(lastWornDate.getFullYear(), lastWornDate.getMonth(), lastWornDate.getDate());
+    
+    const diffTime = Math.abs(today.getTime() - wornDay.getTime());
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
     if (diffDays === 0) timeLabel = "Worn today";

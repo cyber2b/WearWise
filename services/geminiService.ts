@@ -43,10 +43,13 @@ export const analyzeDressImage = async (base64Image: string): Promise<AnalysisRe
       }
     });
 
-    const text = response.text;
+    let text = response.text;
     if (!text) {
       throw new Error("No response from AI");
     }
+
+    // Sanitize: Remove markdown code blocks if present
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
     const result = JSON.parse(text) as AnalysisResult;
     return result;
